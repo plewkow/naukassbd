@@ -1,5 +1,7 @@
 # Obsługa wyjątków aplikacyjnych oraz systemowych wraz z ich wpływem na przetwarzanie transakcji
 
+# Polecam zapoznać się z wykładami czyli sekcja 7 i 8 dla przypomnienia teorii, później rozdziały 9 i 10 (dokumentacja ssbd) i na końcu od 1 do 6 w ramach uklepania wiedzy
+
 ## Spis treści
 
 1. [Architektura obsługi wyjątków w systemie SSBD02](#1-architektura-obsługi-wyjątków-w-systemie-ssbd02)
@@ -19,7 +21,9 @@
 
 ### 1.1 Hierarchia wyjątków aplikacyjnych
 
-System SSBD02 wykorzystuje hierarchiczną strukturę wyjątków opartą na klasie bazowej `AppBaseException`:
+System wykorzystuje hierarchiczną strukturę wyjątków opartą na klasie bazowej `AppBaseException`:
+
+Hierachia klas Throwable -> Exception -> RuntimeException -> NestedRuntimeException -> ErrorResponseException -> ResponseStatusException -> AppBaseException -> Nasze wyjątki
 
 ```java
 package pl.lodz.p.it.ssbd2025.ssbd02.exceptions;
@@ -69,7 +73,7 @@ public abstract class AppBaseException extends ResponseStatusException {
      * @return true jeśli transakcja powinna zostać wycofana
      */
     public boolean shouldRollbackTransaction() {
-        return true; // Domyślnie wszystkie wyjątki aplikacyjne powodują rollback
+        return true; // Domyślnie wszystkie wyjątki aplikacyjne powodują rollback!!!!!!!!!!!!!!
     }
 }
 ```
@@ -104,7 +108,7 @@ public class AccountAlreadyVerifiedException extends AppBaseException {
 `GeneralControllerExceptionHandler` obsługuje wszystkie typy wyjątków w systemie:
 
 ```java
-// srcapi/java/pl/lodz/p/it/ssbd2025/ssbd02/utils/handlers/GeneralControllerExceptionHandler.java
+// src/main/java/pl/lodz/p/it/ssbd2025/ssbd02/utils/handlers/GeneralControllerExceptionHandler.java
 @RestControllerAdvice
 public class GeneralControllerExceptionHandler {
 
@@ -218,35 +222,45 @@ public class GeneralControllerExceptionHandler {
 #### 1.3.1 Interceptor obsługi Optimistic Locking
 
 ```java
-// srcapi/java/pl/lodz/p/it/ssbd2025/ssbd02/interceptors/GenericOptimisticLockHandlingInterceptor.java
+// src/main/java/pl/lodz/p/it/ssbd2025/ssbd02/interceptors/GenericOptimisticLockHandlingInterceptor.java
+
 @Aspect
+// Ustalanie priorytetu wykonywania aspektów – ten aspekt ma niższy priorytet
+// niż większość innych aspektów, ale nie najniższy możliwy.
 @Order(Ordered.LOWEST_PRECEDENCE - 100)
 @Component
 public class GenericOptimisticLockHandlingInterceptor {
 
     private static final Logger log = LoggerFactory.getLogger(GenericOptimisticLockHandlingInterceptor.class);
 
+    // Metoda, która zostanie wykonana PO rzuceniu wyjątku w metodach dopasowanych
+    // do pointcuta `Pointcuts.allRepositoryMethods()`, jeżeli wyjątek to
+    // `OptimisticLockingFailureException` (typowy dla kolizji przy zapisie do bazy danych).
     @AfterThrowing(pointcut = "Pointcuts.allRepositoryMethods()", throwing = "olfe")
     public void handleOptimisticLockException(JoinPoint joinPoint, OptimisticLockingFailureException olfe) {
+        // Pobranie nazwy metody, w której wystąpił wyjątek
         String methodName = joinPoint.getSignature().getName();
+        // Pobranie nazwy klasy, w której znajduje się metoda
         String className = joinPoint.getTarget().getClass().getSimpleName();
         
+        // Zalogowanie ostrzeżenia o wystąpieniu kolizji optymistycznej wraz z informacjami kontekstowymi
         log.warn("Optimistic locking failure in {}.{}: {}", 
                 className, methodName, olfe.getMessage());
         
-        // Konwersja na aplikacyjny wyjątek ConcurrentUpdateException
+        // Rzucenie własnego wyjątku aplikacyjnego, opakowującego oryginalny wyjątek.
+        // Dzięki temu wyżej w logice aplikacji można go łatwiej obsłużyć.
         throw new ConcurrentUpdateException(olfe);
     }
 }
 ```
 
 **Przykład działania w systemie:**
-Gdy dwóch dietetyków próbuje jednocześnie zaktualizować raport badań krwi klienta, drugi otrzyma `ConcurrentUpdateException`.
+Gdy dietetyk w dwóch sesjach próbuje jednocześnie zaktualizować raport badań krwi klienta, w drugiej otrzyma otrzyma `ConcurrentUpdateException`.
 
 #### 1.3.2 Interceptor obsługi naruszeń ograniczeń
 
 ```java
-// srcapi/java/pl/lodz/p/it/ssbd2025/ssbd02/interceptors/AccountConstraintViolationsHandlingInterceptor.java
+// src/main/java/pl/lodz/p/it/ssbd2025/ssbd02/interceptors/AccountConstraintViolationsHandlingInterceptor.java
 @Aspect 
 @Order(Ordered.LOWEST_PRECEDENCE - 100)
 @Component
@@ -288,7 +302,6 @@ public class AccountConstraintViolationsHandlingInterceptor {
 
 **Przykład działania w systemie:**
 Gdy admin próbuje utworzyć konto z emailem, który już istnieje w systemie, interceptor konwertuje `DataIntegrityViolationException` na `AccountConstraintViolationException`.
-
 ---
 
 ## 2. Obsługa błędów w warstwie frontendowej
@@ -296,7 +309,7 @@ Gdy admin próbuje utworzyć konto z emailem, który już istnieje w systemie, i
 ### 2.1 Klient API z automatyczną obsługą błędów
 
 ```typescript
-// srcweb/lib/apiClient.ts
+// web/src/lib/apiClient.ts
 export const apiClient = axios.create({
   baseURL: "/api",
   headers: {
@@ -389,7 +402,7 @@ apiClient.interceptors.response.use(
 ### 2.2 Centralizowany handler błędów
 
 ```typescript
-// srcweb/lib/axiosErrorHandler.ts
+// web/src/lib/axiosErrorHandler.ts
 import axios from "axios";
 import i18n from "@/i18n";
 import { toast } from "sonner";
@@ -423,7 +436,7 @@ export const axiosErrorHandler = (
 ### 3.1 Interceptor logowania transakcji
 
 ```java
-// srcapi/java/pl/lodz/p/it/ssbd2025/ssbd02/interceptors/TransactionLoggingInterceptor.java
+// api/src/main/java/pl/lodz/p/it/ssbd2025/ssbd02/interceptors/TransactionLoggingInterceptor.java
 @Aspect 
 @Order(Ordered.LOWEST_PRECEDENCE)
 @Component
@@ -475,7 +488,7 @@ public class TransactionLoggingInterceptor {
 **Przykład z AccountService:**
 
 ```java
-// srcapi/java/pl/lodz/p/it/ssbd2025/ssbd02/mok/service/implementations/AccountService.java
+// src/main/java/pl/lodz/p/it/ssbd2025/ssbd02/mok/service/implementations/AccountService.java
 @Service
 @Transactional(rollbackFor = {AppBaseException.class, RuntimeException.class})
 public class AccountService implements IAccountService {
@@ -506,8 +519,8 @@ public class AccountService implements IAccountService {
 
 ### 4.1 Obsługa błędów w formularzu zmiany danych
 
-```typescriptreact
-// srcweb/components/changeDataForm.tsx
+```typescript
+// web/src/components/changeDataForm.tsx
 export function ChangeDataForm({
   firstName,
   lastName,
@@ -621,8 +634,8 @@ export function ChangeDataForm({
 
 ### 4.2 Obsługa błędów w formularzu ankiety okresowej
 
-```typescriptreact
-// srcweb/components/submitPeriodicSurveyForm.tsx
+```typescript
+// web/src/components/submitPeriodicSurveyForm.tsx
 export function SubmitPeriodicSurveyForm() {
   const { t } = useTranslation();
   const submitSurveyMutation = useSubmitPeriodicSurvey();
@@ -743,8 +756,8 @@ export function SubmitPeriodicSurveyForm() {
 
 ### 4.3 Obsługa błędów w raportach badań krwi
 
-```typescriptreact
-// srcweb/components/blood-test-reports.tsx
+```typescript
+// web/src/components/blood-test-reports.tsx
 export default function BloodTestReports({ userRole }: BloodTestReportsProps) {
   const { clientId } = useParams<{ clientId: string }>()
 
@@ -831,7 +844,7 @@ export default function BloodTestReports({ userRole }: BloodTestReportsProps) {
 **W serwisach:**
 
 ```java
-// srcapi/java/pl/lodz/p/it/ssbd2025/ssbd02/mok/service/implementations/AccountService.java
+// src/main/java/pl/lodz/p/it/ssbd2025/ssbd02/mok/service/implementations/AccountService.java
 @Service
 @Transactional
 public class AccountService implements IAccountService {
@@ -869,7 +882,7 @@ public class AccountService implements IAccountService {
 **W interceptorach:**
 
 ```java
-// srcapi/java/pl/lodz/p/it/ssbd2025/ssbd02/interceptors/GenericOptimisticLockHandlingInterceptor.java
+// src/main/java/pl/lodz/p/it/ssbd2025/ssbd02/interceptors/GenericOptimisticLockHandlingInterceptor.java
 @AfterThrowing(pointcut = "Pointcuts.allRepositoryMethods()", throwing = "olfe")
 public void handleOptimisticLockException(JoinPoint joinPoint, OptimisticLockingFailureException olfe) {
     String methodName = joinPoint.getSignature().getName();
@@ -885,7 +898,7 @@ public void handleOptimisticLockException(JoinPoint joinPoint, OptimisticLocking
 ### 5.2 Logowanie w frontendzie
 
 ```typescript
-// srcweb/lib/apiClient.ts
+// web/src/lib/apiClient.ts
 apiClient.interceptors.response.use(
   (response: AxiosResponse) => {
     if (process.env.NODE_ENV === "development") {
@@ -918,7 +931,7 @@ apiClient.interceptors.response.use(
 
 System SSBD02 implementuje kompleksową obsługę wyjątków na wszystkich warstwach:
 
-### Backend (Java/Spring Boot):
+### Backend:
 
 - **Hierarchiczna struktura wyjątków** - `AppBaseException` jako klasa bazowa dla wszystkich wyjątków aplikacyjnych
 - **Globalny handler** - `GeneralControllerExceptionHandler` obsługuje wszystkie typy wyjątków
@@ -928,11 +941,7 @@ System SSBD02 implementuje kompleksową obsługę wyjątków na wszystkich warst
 - `AccountConstraintViolationsHandlingInterceptor` - obsługa naruszeń ograniczeń bazy danych
 - `TransactionLoggingInterceptor` - logowanie cyklu życia transakcji
 
-
-
-
-
-### Frontend (React/TypeScript):
+### Frontend:
 
 - **Interceptory Axios** - automatyczna obsługa błędów HTTP i odświeżanie tokenów w `apiClient.ts`
 - **Centralizowany handler** - `axiosErrorHandler.ts` dla spójnej obsługi błędów
@@ -955,8 +964,86 @@ System SSBD02 implementuje kompleksową obsługę wyjątków na wszystkich warst
 - **Optimistic locking** - kontrola współbieżności z automatyczną obsługą konfliktów
 - **Logowanie transakcji** - monitoring rozpoczęcia, zatwierdzenia i rollback
 
+!! uwaga jedyny wyjatek ktory nie robi zawsze rollbacku to przy loginie - noRollbackfor:
 
-System zapewnia niezawodność, spójność danych i wysoką jakość doświadczenia użytkownika poprzez graceful handling wszystkich typów błędów.
+```java
+@PreAuthorize("permitAll()")
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = false, transactionManager = "mokTransactionManager", timeoutString = "${transaction.timeout}",
+            noRollbackFor = {InvalidCredentialsException.class, ExcessiveLoginAttemptsException.class, AccountIsAutolockedException.class})
+    @Retryable(retryFor = {
+            JpaSystemException.class,
+            ConcurrentUpdateException.class,
+    }, backoff = @Backoff(delayExpression = "${app.retry.backoff}"), maxAttemptsExpression = "${app.retry.maxattempts}")
+    public SensitiveDTO login(String username, SensitiveDTO password, String ipAddress, HttpServletResponse response) {
+        Account account = accountRepository.findByLogin(username).orElseThrow(AccountNotFoundException::new);
+        List<AccountRolesProjection> roles = accountRepository.findAccountRolesByLogin(username);
+        List<String> userRoles = new ArrayList<>();
+        if(roles.isEmpty()) {
+            throw new AccountHasNoRolesException();
+        }
+        roles.forEach(role -> {
+            if (role.isActive()) {
+                userRoles.add(role.getRoleName());
+            }
+        });
+        if(userRoles.isEmpty()) {
+            throw new AccountHasNoRolesException();
+        }
+        if (!account.isActive()) {
+            throw new AccountNotActiveException();
+        }
+        if (!account.isVerified()) {
+            throw new AccountNotVerifiedException();
+        }
+        if (account.isAutoLocked()) {
+            SensitiveDTO dto = tokenUtil.generateAutoLockUnlockCode(account);
+            emailService.sendAutolockUnlockLink(account.getLogin(), account.getEmail(), new SensitiveDTO(unlockURL+dto.getValue()), account.getLanguage());
+            throw new AccountIsAutolockedException();
+        }
+        Date currentTime = new Date(System.currentTimeMillis());
+        if (tokenUtil.checkPassword(password, account.getPassword())) {
+            String acceptLanguage = MiscellaneousUtil.getAcceptLanguage();
+            if (acceptLanguage != null) {
+                Language newLanguage = acceptLanguage.toLowerCase().contains("pl") ? Language.pl_PL : Language.en_EN;
+                if (account.getLanguage() != newLanguage) {
+                    account.setLanguage(newLanguage);
+                    accountRepository.saveAndFlush(account);
+                }
+            }
+
+            accountRepository.updateSuccessfulLogin(username, currentTime, ipAddress, 0);
+            if(account.isTwoFactorAuth()){
+                emailService.sendTwoFactorCode(account.getEmail(), account.getLogin(), tokenUtil.generateTwoFactorCode(account), account.getLanguage());
+
+                SensitiveDTO access2FAToken = jwtTokenProvider.generateAccess2FAToken(account);
+
+                tokenRepository.saveAndFlush(new TokenEntity(access2FAToken.getValue(), jwtTokenProvider.getExpiration(access2FAToken), account, TokenType.ACCESS_2FA));
+
+                return access2FAToken;
+            }
+            if(userRoles.contains("ADMIN")) {
+                emailService.sendAdminLoginEmail(account.getEmail(), account.getLogin(), ipAddress, account.getLanguage());
+            }
+            TokenPairDTO pair = jwtService.generatePair(account, userRoles);
+            String access = pair.getAccessToken();
+            String refresh = pair.getRefreshToken();
+            if(changePasswordRepository.findByAccount(account).isPasswordToChange()) {
+                throw new PasswordToChangeException();
+            }
+            jwtTokenProvider.cookieSetter(new SensitiveDTO(refresh), jwtRefreshExpiration, response);
+
+            return new SensitiveDTO(access);
+        } else {
+            if(account.getLoginAttempts() + 1 >= maxLoginAttempts) {
+                accountRepository.lockTemporarily(username, Timestamp.from(tokenUtil.generateMinuteExpiration(lockedFor).toInstant()));
+                accountRepository.updateFailedLogin(username, currentTime, ipAddress, 0);
+                throw new ExcessiveLoginAttemptsException();
+            }
+            accountRepository.updateFailedLogin(username, currentTime, ipAddress, account.getLoginAttempts() + 1);
+            throw new InvalidCredentialsException();
+        }
+    }
+```
 
 ## 7. Wykład - wyjątki, błędy, asercje
 
